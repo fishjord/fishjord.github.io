@@ -1,2 +1,8 @@
 name: Your New Jekyll Site
 pygments: true
+
+author:
+  name: Jordan Fish
+  email: jrdn.fish@gmail.com
+  github: fishjord
+  twitter: fishjord

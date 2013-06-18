@@ -1,7 +1,7 @@
 ---
 layout: post
 title:  "The power of [computer] science!"
-date:   2013-05-09 18:59:21
+date:   2010-09-10 18:59:21
 categories: misc
 ---
 
@@ -9,21 +9,168 @@ categories: misc
 
 First we need to understand that in order to delete something you have to overwrite it several times with random bit patterns.  In reality 'delete' means nothing more than the space that file occupies is marked as free.  The actual 1s and 0s of the file still exist on the drive, intact, until they are over written.
 
-Next we need to know that when a drive is formatted all that happens is a bunch of accounting information is written to the drive, there is no overwriting of any file data...probably, the xbox 360 drive is an extremely simple case, other file systems allow you to vary the block size [smallest amount of space a 'file' can occupy] and other variables that effect where accounting information is written, but if you reformat a drive using the exact same specifications all that should happen is the accounting information is overwritten and your files get unlinked (aka the file system doesn't know they exist anymore).  The 1s and 0s of the file still exist on the drive however.
+Next we need to know that when a drive is formatted all that happens is a bunch of accounting information is written to the drive, there is no overwriting of any file data...probably, the xbox 360 drive is an extremely simple case, other file systems allow you to vary the block size \[smallest amount of space a 'file' can occupy\] and other variables that effect where accounting information is written, but if you reformat a drive using the exact same specifications all that should happen is the accounting information is overwritten and your files get unlinked (aka the file system doesn't know they exist anymore).  The 1s and 0s of the file still exist on the drive however.
 
 Using this information I was able to salvage all of my saves from the drive.
 
 So you want to recover your xbox 360 saves from your formatted hard drive (or you just want to know how it is possible, that's cool too).  This is -not- for the faint of heart, most of the steps are fairly benign, but some can really cause damage to your xbox 360 hard drive and as always, you are responsible for whatever you do, this is just a recap of how I managed to recover my saves.  It may or may not work for you.
 
 ## What you'll need:
-Some way to connect your xbox 360 hard drive to your computer (Data Migration Kit [significantly cheaper], Xport360 [also supports xbox memory cards])
-Xport360 software (http://uk.codejunkies.com/support/article.aspx?article_id=272)
-FileFinder.java (written by me)
-check_potential_files.py (written by me)
-extract360.py (ftp://rene-ladan.nl/pub/distfiles/extract360.py by Rene Ladan)
+Some way to connect your xbox 360 hard drive to your computer (Data Migration Kit \[significantly cheaper\], Xport360 \[also supports xbox memory cards\])
+[Xport360 software](http://uk.codejunkies.com/support/article.aspx?article_id=272)
+[FileFinder.java](/resources/xbox_save_extract/FileFinder.java) (written by me)
+
+{% highlight java %}
+import java.io.BufferedInputStream;
+import java.io.DataInputStream;
+import java.io.EOFException;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+
+/**
+ *
+ * @author fishjord
+ */
+public class FileFinder {
+
+    private static final int CON_ = 1129270816;
+    private static final int LIVE = 1279874629;
+    private static final int PIRS = 1346982483;
+
+    public static void main(String[] args) throws IOException {
+        if (args.length != 1) {
+            System.err.println("USAGE: FileFinder <input_file.bin>");
+            return;
+        }
+
+        int numHashes = 100;
+        File f = new File(args[0]);
+        DataInputStream is = new DataInputStream(
+                             new BufferedInputStream(new FileInputStream(f)));
+        long hashesEvery = f.length() / numHashes;
+        long nextHash = hashesEvery;
+
+        for (int index = 0; index < numHashes; index++) {
+            System.err.print("-");
+        }
+        System.err.println();
+
+        long start = System.currentTimeMillis();
+        long totalRead = 0;
+        try {
+            while (true) {
+                try {
+
+                    int read = is.readInt();
+                    totalRead += 4;
+                    switch (read) {
+		        case CON_:
+			case LIVE:
+			case PIRS:
+			   System.out.println(read - 4);
+                    }
+
+                    if (totalRead > nextHash) {
+                        System.err.print("#");
+                    }
+                } catch (EOFException ignore) {
+                    break;
+                }
+            }
+        } finally {
+            System.err.println();
+        }
+
+        System.out.println("Read " + totalRead + " bytes in " + (System.currentTimeMillis() - start));
+    }
+}
+
+{% endhighlight %}
+
+[check_potential_files.py](/resources/xbox_save_extract/check_potential_files.py) (written by me)
+
+{% highlight python %}
+#!/usr/bin/python
+
+import hashlib
+import sys
+import time
+import struct
+import os
+import subprocess
+
+reader = open("<path_to_xbox360_hd_img>", "rb")
+
+fileno = 0
+for line in open("file_locations.txt"):
+    line = line.strip()
+    if line == "":
+        continue
+    
+    pos = long(line)
+    
+    reader.seek(pos)
+    data = reader.read(1024 * 1024 * 4)
+    filetype = data[:4]
+    fileno += 1
+
+    reader.seek(pos)
+    reader.seek(0x32C, 1)
+    
+    sha1 = reader.read(20)
+    reader.seek(4, 1)
+
+    if filetype == "CON ":
+        sha1_bytes_length = 0xA000 - 0x0344
+    else:
+        sha1_bytes_length = 0xB000 - 0x0344
+
+    found_sha1 = hashlib.sha1(reader.read(sha1_bytes_length))
+    found_digest = found_sha1.digest()
+
+    if found_digest != sha1:
+        continue
+
+    (mentry_id, content_type) = struct.unpack(">LL", reader.read(8))
+
+    content_types = []
+    if content_type == 0:
+        content_types.append("(no type)")
+    if content_type & 0x00000001:
+        content_types.append("Game save")
+    if content_type & 0x00000002:
+        content_types.append("Game add-on")
+    if content_type & 0x00030000:
+        content_types.append("Theme")
+    if content_type & 0x00090000:
+        content_types.append("Video clip")
+    if content_type & 0x000C0000:
+        content_types.append("Game trailer")
+    if content_type & 0x000D0000:
+        content_types.append("XBox Live Arcade")
+    if content_type & 0x00010000:
+        content_types.append("Gamer profile")
+    if content_type & 0x00020000:
+        content_types.append("Gamer picture")
+    if content_type & 0x00040000:
+        content_types.append("System update")
+
+    print fileno, filetype, pos, ",".join(content_types), found_sha1.hexdigest()
+
+    if "Game save" in content_types and filetype == "CON ":
+        out = open("file%s.bin" % fileno, "wb")
+        out.write(data)
+        out.close()
+
+        subprocess.call(["./extract360.py", "file%s.bin" % fileno])
+
+{% endhighlight %}
+
+[extract360.py](ftp://rene-ladan.nl/pub/distfiles/extract360.py) by Rene Ladan
 
 ## Getting the Disk Image
-The first thing we need to do is get an exact copy of the bits on the hard drive (this will require the same amount of free space on your computer as the size of your xbox 360 hard drive, in my case 120 gigs).  There are several ways to do this.  Xport360 has a backup option that will create an exact image of your drive and save it to a file; however I never got it to work.  Xplorer360 did work for me, however it is a pain to get working, you need to download a copy of the mscvr71.dll to and place it in your system directory (vista/win7).  That being said it did work.  The method that I settled on was using a linux staple tool dd.  Hooked the drive up to my linux box and used the command 'dd if=/dev/sd[a/b/c/d/e/f/g] of=xbox_image.bin bs=4096' to copy the bits to the file xbox_image.bin.
+The first thing we need to do is get an exact copy of the bits on the hard drive (this will require the same amount of free space on your computer as the size of your xbox 360 hard drive, in my case 120 gigs).  There are several ways to do this.  Xport360 has a backup option that will create an exact image of your drive and save it to a file; however I never got it to work.  Xplorer360 did work for me, however it is a pain to get working, you need to download a copy of the mscvr71.dll to and place it in your system directory (vista/win7).  That being said it did work.  The method that I settled on was using a linux staple tool dd.  Hooked the drive up to my linux box and used the command 'dd if=/dev/sd\[a/b/c/d/e/f/g\] of=xbox_image.bin bs=4096' to copy the bits to the file xbox_image.bin.
 
 ## Identifying Potential Files
 With the drive image in hand I had to figure out how exactly to find potential files on the hard drive.  As luck would have it the good people at http://free60.org/ have a great homebrew wiki up that has detailed descriptions of the xfat file system and file container format.  The take away was that any file we're interested in the first 4 bytes will be either 'CON ' 'LIVE' or 'PIRS'.  Through trial and error I was also able to determine that the files are aligned to a 4 byte boundary (really in retrospect that would have been a safe assumption, but you never know).  Now I just needed a way to process this huge 120 gig file and record every location where CON  LIVE or PIRS occurs.  Easy right?
@@ -32,15 +179,15 @@ My first attempt at that was in python, which was great, it was easy to experime
 
 Anyway, this wasn't really acceptable so once I had worked out all the kinks (I did a lot of trial and error to figure out things, and the python script was immensely helpful with that) I recoded it in java.  Less than 50 lines of code and I had myself a fast, fairly accurate xfat file detector.
 
-Finally to identify potential files I ran my java program (it writes potential file locations as offsets from fileloc 0 to stdout), redirect stdout to a file, and then let it run.  It processed the entire 120gig disk image file in a little under 55 minutes.  Compared to the python script that I let run for 24 and it didn't finish...<Sigh>
+Finally to identify potential files I ran my java program (it writes potential file locations as offsets from fileloc 0 to stdout), redirect stdout to a file, and then let it run.  It processed the entire 120gig disk image file in a little under 55 minutes.  Compared to the python script that I let run for 24 and it didn't finish...&lt;Sigh&gt;
 
 Checking to see which are real files
-So now we have a file that has a list of the locations of all the potential files in the xbox 360 disk image.  In order to figure out which ones are real we need to use a bit of understanding gleaned from free360.org.  Every xbox360 file has a sha1 hash embedded in it that is a hash of  the bytes from 0x0344-0x[A-B]000 depending on if the file is CON or LIVE/PIRS.  So we can do a simple has check and if it fails we assume it isn't a real file, if it passes we've got a real file!  Woo!
+So now we have a file that has a list of the locations of all the potential files in the xbox 360 disk image.  In order to figure out which ones are real we need to use a bit of understanding gleaned from free360.org.  Every xbox360 file has a sha1 hash embedded in it that is a hash of  the bytes from 0x0344-0x\[A-B\]000 depending on if the file is CON or LIVE/PIRS.  So we can do a simple has check and if it fails we assume it isn't a real file, if it passes we've got a real file!  Woo!
 
 Another useful tidbit from free60.org is information about the content type bytes.  Every file has an or'ed 4 byte bit pattern that specifies what type(s) the file is, and one of those types is Game save!
 
 ## Identifying your saves
-Now once you've run the check_potential_files.py you'll have a bunch of files and folders in the current working directory (with names like file<number>.bin file<number>.bin.txt file<number>.bin.dir and some pngs.  Where it gets a bit tricky is trying to figure out which of these files are your game saves.  There are some hints in the file<number>.bin.txt (this file is basically a plain text dump of the.
+Now once you've run the check_potential_files.py you'll have a bunch of files and folders in the current working directory (with names like file&lt;number&gt;.bin file&lt;number&gt;.bin.txt file&lt;number&gt;.bin.dir and some pngs.  Where it gets a bit tricky is trying to figure out which of these files are your game saves.  There are some hints in the file&lt;number&gt;.bin.txt (this file is basically a plain text dump of the.
 
 Some useful tidbits I've found are that for every game a save directory is created.  This directory will have two pngs (one 64x64, one 32x32) and contain a save for that game.  The easiest way to identify a save directory is to look at the pngs that come out for the right save directory; they should be fairly recognizable.
 
